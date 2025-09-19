@@ -349,6 +349,10 @@ export class QueryAnalysisService {
         this.templates = JSON.parse(data);
       }
     } catch (error) {
+
+
+
+
       this.templates = [];
     }
   }
@@ -364,6 +368,7 @@ export class QueryAnalysisService {
       }
       writeFileSync(this.templatesPath, JSON.stringify(this.templates, null, 2));
     } catch (error) {
+      console.warn('Failed to save query templates:', error);
     }
   }
 
@@ -379,6 +384,7 @@ export class QueryAnalysisService {
       }
       writeFileSync(historyPath, JSON.stringify(this.queryHistory, null, 2));
     } catch (error) {
+      console.warn('Failed to save query history:', error);
     }
   }
 

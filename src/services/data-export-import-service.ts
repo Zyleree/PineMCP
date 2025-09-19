@@ -2,7 +2,7 @@ import { BaseDatabaseAdapter } from '../adapters/base-database-adapter.js';
 import { DatabaseConnectionManager } from '../adapters/database-connection-manager.js';
 import { ExportOptions, ImportOptions } from '../types/schema.js';
 import { writeFileSync, readFileSync } from 'fs';
-import { ConnectionError, QueryError } from '../types/errors.js';
+import { ConnectionError } from '../types/errors.js';
 
 export class DataExportImportService {
   private connectionManager: DatabaseConnectionManager;

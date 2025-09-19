@@ -1,7 +1,7 @@
 import sqlite3 from 'sqlite3';
 import { BaseDatabaseAdapter } from './base-database-adapter.js';
 import { QueryResult, TableInfo, DatabaseStats, ColumnInfo, IndexInfo, ConstraintInfo } from '../types/database.js';
-import { ConnectionError, TransactionError, QueryError } from '../types/errors.js';
+import { ConnectionError, TransactionError } from '../types/errors.js';
 
 export class SQLiteAdapter extends BaseDatabaseAdapter {
   private db: sqlite3.Database | null = null;

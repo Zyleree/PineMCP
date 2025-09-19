@@ -19,7 +19,7 @@ export const MCPConfig = z.object({
   })),
   server: z.object({
     name: z.string().default('PineMCP'),
-    version: z.string().default('2.0.0'),
+    version: z.string().default('2.1.0'),
     description: z.string().default('A professional MCP server supporting multiple database types'),
   }),
   logging: z.object({

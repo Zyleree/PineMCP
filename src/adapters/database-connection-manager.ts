@@ -81,10 +81,12 @@ export class DatabaseConnectionManager {
   }
 
   async disconnectAll(): Promise<void> {
-    for (const [name, connection] of this.connections) {
+    for (const [_name, connection] of this.connections) {
       try {
         await connection.disconnect();
       } catch (error) {
+        // Continue with cleanup even if disconnect fails
+        console.error('Failed to disconnect:', error);
       }
     }
     this.connections.clear();

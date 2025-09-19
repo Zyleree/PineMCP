@@ -1256,9 +1256,11 @@ export class MCPServerService {
         try {
           await this.connectionManager.addConnection(db.name, db);
         } catch (error) {
+          console.error(`Failed to add connection ${db.name}:`, error);
         }
       }
     } else {
+      console.error('No database connections configured');
     }
 
     const transport = new StdioServerTransport();

@@ -1,7 +1,7 @@
 import { Client, types } from 'cassandra-driver';
 import { BaseDatabaseAdapter } from './base-database-adapter.js';
 import { QueryResult, TableInfo, DatabaseStats, ColumnInfo, IndexInfo } from '../types/database.js';
-import { ConnectionError, QueryError } from '../types/errors.js';
+import { ConnectionError } from '../types/errors.js';
 
 export class CassandraAdapter extends BaseDatabaseAdapter {
   private client: Client | null = null;
