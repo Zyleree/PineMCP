@@ -1,4 +1,5 @@
 import { DatabaseConfig, QueryResult, TableInfo, DatabaseStats, DatabaseOperation } from '../types/database.js';
+import { QueryError } from '../types/errors.js';
 
 export abstract class BaseDatabaseAdapter {
   protected config: DatabaseConfig;
@@ -22,7 +23,7 @@ export abstract class BaseDatabaseAdapter {
   
   protected validateQuery(query: string): void {
     if (!query || typeof query !== 'string') {
-      throw new Error('Query must be a non-empty string');
+      throw new QueryError('Query must be a non-empty string');
     }
     
     const dangerousPatterns = [
@@ -35,14 +36,14 @@ export abstract class BaseDatabaseAdapter {
     
     for (const pattern of dangerousPatterns) {
       if (pattern.test(query)) {
-        throw new Error('Potentially dangerous query detected');
+        throw new QueryError('Potentially dangerous query detected');
       }
     }
   }
 
   protected validateParameters(parameters?: unknown[]): void {
     if (parameters && !Array.isArray(parameters)) {
-      throw new Error('Parameters must be an array');
+      throw new QueryError('Parameters must be an array');
     }
   }
 

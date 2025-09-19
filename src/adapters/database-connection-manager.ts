@@ -1,6 +1,7 @@
 import { BaseDatabaseAdapter } from './base-database-adapter.js';
 import { DatabaseConfig, DatabaseType } from '../types/database.js';
 import { DatabaseAdapterFactory } from './database-adapter-factory.js';
+import { ConnectionError } from '../types/errors.js';
 
 export class DatabaseConnectionManager {
   private connections: Map<string, BaseDatabaseAdapter> = new Map();
@@ -16,7 +17,7 @@ export class DatabaseConnectionManager {
         this.currentConnection = name;
       }
     } catch (error) {
-      throw new Error(`Failed to add connection '${name}': ${error}`);
+      throw new ConnectionError(`Failed to add connection '${name}': ${error}`, name);
     }
   }
 
@@ -43,7 +44,7 @@ export class DatabaseConnectionManager {
     if (this.connections.has(name)) {
       this.currentConnection = name;
     } else {
-      throw new Error(`Connection '${name}' not found`);
+      throw new ConnectionError(`Connection '${name}' not found`, name);
     }
   }
 
@@ -84,7 +85,6 @@ export class DatabaseConnectionManager {
       try {
         await connection.disconnect();
       } catch (error) {
-        console.error(`Failed to disconnect ${name}:`, error);
       }
     }
     this.connections.clear();

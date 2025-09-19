@@ -5,9 +5,16 @@
 [![GitHub Issues](https://img.shields.io/github/issues/Zyleree/PineMCP)](https://github.com/Zyleree/PineMCP/issues)
 [![MIT License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-## PineMCP
+## PineMCP v2.1.0
 
 PineMCP is a professional Model Context Protocol (MCP) server that provides a unified, safe interface to multiple database types. It ships with robust connection management, schema tooling, data import/export, and query analysis — all exposed as MCP tools over stdio.
+
+**🚀 New in v2.1.0:**
+- ✅ **Fixed Critical Bugs**: All database adapters now work correctly
+- ✅ **Enhanced Error Handling**: Structured error system with proper context
+- ✅ **Improved Type Safety**: Eliminated unsafe type assertions
+- ✅ **Better Security**: Enhanced NoSQL injection protection
+- ✅ **MCP Integration**: Seamless configuration loading from MCP JSON files
 
 —
 
@@ -17,6 +24,7 @@ PineMCP is a professional Model Context Protocol (MCP) server that provides a un
 - Schema comparison, DDL generation, and migration scaffolding
 - Data export/import (JSON, CSV, SQL, XML)
 - Query analysis with heuristics, history, and templates
+- **Production-ready** with comprehensive error handling and security measures
 
 —
 

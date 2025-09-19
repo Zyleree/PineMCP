@@ -1,6 +1,7 @@
 import { Pool, PoolClient, QueryResult as PGQueryResult } from 'pg';
 import { BaseDatabaseAdapter } from './base-database-adapter.js';
 import { QueryResult, TableInfo, DatabaseStats, ColumnInfo, IndexInfo, ConstraintInfo } from '../types/database.js';
+import { ConnectionError, TransactionError, QueryError } from '../types/errors.js';
 
 export class PostgreSQLAdapter extends BaseDatabaseAdapter {
   private pool: Pool | null = null;
@@ -26,7 +27,10 @@ export class PostgreSQLAdapter extends BaseDatabaseAdapter {
       this.connected = true;
     } catch (error) {
       this.connected = false;
-      throw this.handleError(error);
+      throw new ConnectionError(
+        `Failed to connect to PostgreSQL database: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        'postgresql'
+      );
     }
   }
 
@@ -46,7 +50,10 @@ export class PostgreSQLAdapter extends BaseDatabaseAdapter {
       }
       this.connected = false;
     } catch (error) {
-      throw this.handleError(error);
+      throw new ConnectionError(
+        `Failed to disconnect from PostgreSQL database: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        'postgresql'
+      );
     }
   }
 
@@ -57,21 +64,30 @@ export class PostgreSQLAdapter extends BaseDatabaseAdapter {
   async executeQuery(query: string, parameters?: unknown[]): Promise<QueryResult> {
     const client = this.transactionClient || this.client;
     if (!client) {
-      throw new Error('Database not connected');
+      throw new ConnectionError('Database not connected', 'postgresql');
     }
 
-    const result: PGQueryResult = await client.query(query, parameters);
-    
-    return {
-      rows: result.rows,
-      rowCount: result.rowCount || 0,
-      fields: result.fields.map(field => ({
-        name: field.name,
-        dataType: field.dataTypeID.toString(),
-        nullable: true, // PostgreSQL FieldDef doesn't have notNull property
-        defaultValue: undefined, // PostgreSQL FieldDef doesn't have defaultValue property
-      })),
-    };
+    try {
+      const result: PGQueryResult = await client.query(query, parameters);
+      
+      return {
+        rows: result.rows,
+        rowCount: result.rowCount || 0,
+        fields: result.fields.map(field => ({
+          name: field.name,
+          dataType: this.getPostgreSQLDataType(field.dataTypeID),
+          nullable: !('notNull' in field ? field.notNull : true),
+          defaultValue: 'defaultValue' in field ? field.defaultValue : undefined,
+        })),
+      };
+    } catch (error) {
+      throw new QueryError(
+        `PostgreSQL query failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        'postgresql',
+        query,
+        parameters
+      );
+    }
   }
 
   async getTables(): Promise<TableInfo[]> {
@@ -284,31 +300,62 @@ export class PostgreSQLAdapter extends BaseDatabaseAdapter {
 
   async beginTransaction(): Promise<void> {
     if (this.transactionClient) {
-      throw new Error('Transaction already in progress');
+      throw new TransactionError('Transaction already in progress', 'postgresql');
     }
     
-    this.transactionClient = await this.pool!.connect();
-    await this.transactionClient.query('BEGIN');
+    if (!this.pool) {
+      throw new ConnectionError('Database not connected', 'postgresql');
+    }
+    
+    try {
+      this.transactionClient = await this.pool.connect();
+      await this.transactionClient.query('BEGIN');
+    } catch (error) {
+      if (this.transactionClient) {
+        this.transactionClient.release();
+        this.transactionClient = null;
+      }
+      throw new TransactionError(
+        `Failed to begin PostgreSQL transaction: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        'postgresql'
+      );
+    }
   }
 
   async commitTransaction(): Promise<void> {
     if (!this.transactionClient) {
-      throw new Error('No transaction in progress');
+      throw new TransactionError('No transaction in progress', 'postgresql');
     }
     
-    await this.transactionClient.query('COMMIT');
-    this.transactionClient.release();
-    this.transactionClient = null;
+    try {
+      await this.transactionClient.query('COMMIT');
+    } catch (error) {
+      throw new TransactionError(
+        `Failed to commit PostgreSQL transaction: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        'postgresql'
+      );
+    } finally {
+      this.transactionClient.release();
+      this.transactionClient = null;
+    }
   }
 
   async rollbackTransaction(): Promise<void> {
     if (!this.transactionClient) {
-      throw new Error('No transaction in progress');
+      throw new TransactionError('No transaction in progress', 'postgresql');
     }
     
-    await this.transactionClient.query('ROLLBACK');
-    this.transactionClient.release();
-    this.transactionClient = null;
+    try {
+      await this.transactionClient.query('ROLLBACK');
+    } catch (error) {
+      throw new TransactionError(
+        `Failed to rollback PostgreSQL transaction: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        'postgresql'
+      );
+    } finally {
+      this.transactionClient.release();
+      this.transactionClient = null;
+    }
   }
 
   isInTransaction(): boolean {
@@ -335,5 +382,157 @@ export class PostgreSQLAdapter extends BaseDatabaseAdapter {
       return error;
     }
     return new Error(`PostgreSQL error: ${String(error)}`);
+  }
+
+  private getPostgreSQLDataType(dataTypeID: number): string {
+    // Map PostgreSQL OIDs to data type names
+    const typeMap: Record<number, string> = {
+      16: 'boolean',
+      17: 'bytea',
+      18: 'char',
+      19: 'name',
+      20: 'int8',
+      21: 'int2',
+      22: 'int2vector',
+      23: 'int4',
+      24: 'regproc',
+      25: 'text',
+      26: 'oid',
+      27: 'tid',
+      28: 'xid',
+      29: 'cid',
+      30: 'oidvector',
+      71: 'pg_type',
+      75: 'pg_attribute',
+      81: 'pg_proc',
+      83: 'pg_class',
+      114: 'json',
+      142: 'xml',
+      194: 'pg_node_tree',
+      210: 'smgr',
+      600: 'point',
+      601: 'lseg',
+      602: 'path',
+      603: 'box',
+      604: 'polygon',
+      628: 'line',
+      629: 'line',
+      650: 'cidr',
+      651: 'cidr[]',
+      700: 'float4',
+      701: 'float8',
+      702: 'abstime',
+      703: 'reltime',
+      704: 'tinterval',
+      705: 'unknown',
+      718: 'circle',
+      719: 'circle[]',
+      774: 'macaddr',
+      775: 'inet',
+      776: 'bool',
+      790: 'money',
+      791: 'money[]',
+      829: 'macaddr',
+      869: 'inet',
+      1000: 'bool[]',
+      1001: 'bytea[]',
+      1002: 'char[]',
+      1003: 'name[]',
+      1005: 'int2[]',
+      1006: 'int2vector[]',
+      1007: 'int4[]',
+      1009: 'text[]',
+      1014: 'bpchar[]',
+      1015: 'varchar[]',
+      1016: 'int8[]',
+      1021: 'float4[]',
+      1022: 'float8[]',
+      1023: 'abstime[]',
+      1024: 'reltime[]',
+      1025: 'tinterval[]',
+      1027: 'polygon[]',
+      1028: 'oid[]',
+      1033: 'aclitem[]',
+      1034: 'aclitem',
+      1040: 'macaddr[]',
+      1041: 'inet[]',
+      1042: 'bpchar',
+      1043: 'varchar',
+      1082: 'date',
+      1083: 'time',
+      1114: 'timestamp',
+      1115: 'timestamp[]',
+      1184: 'timestamptz',
+      1185: 'timestamptz[]',
+      1186: 'interval',
+      1187: 'interval[]',
+      1231: 'numeric[]',
+      1266: 'timetz',
+      1270: 'timetz[]',
+      1560: 'bit',
+      1561: 'bit[]',
+      1562: 'varbit',
+      1563: 'varbit[]',
+      1700: 'numeric',
+      1790: 'refcursor',
+      2202: 'regprocedure',
+      2203: 'regoper',
+      2204: 'regoperator',
+      2205: 'regclass',
+      2206: 'regtype',
+      2207: 'regrole',
+      2208: 'regnamespace',
+      2209: 'regproc[]',
+      2210: 'regprocedure[]',
+      2211: 'regoper[]',
+      2212: 'regoperator[]',
+      2213: 'regclass[]',
+      2214: 'regtype[]',
+      2215: 'regrole[]',
+      2216: 'regnamespace[]',
+      2949: 'uuid',
+      2950: 'uuid[]',
+      2951: 'txid_snapshot',
+      3220: 'pg_lsn',
+      3221: 'pg_lsn[]',
+      3614: 'tsvector',
+      3615: 'tsquery',
+      3642: 'gtsvector',
+      3643: 'tsvector[]',
+      3644: 'tsquery[]',
+      3645: 'gtsvector[]',
+      3734: 'regconfig',
+      3735: 'regdictionary',
+      3769: 'regconfig[]',
+      3770: 'regdictionary[]',
+      3802: 'jsonb',
+      3807: 'jsonb[]',
+      3904: 'int4range',
+      3905: 'int4range[]',
+      3906: 'int8range',
+      3907: 'int8range[]',
+      3908: 'numrange',
+      3909: 'numrange[]',
+      3910: 'tsrange',
+      3911: 'tsrange[]',
+      3912: 'tstzrange',
+      3913: 'tstzrange[]',
+      3914: 'daterange',
+      3915: 'daterange[]',
+      3926: 'int4multirange',
+      3927: 'int4multirange[]',
+      3928: 'int8multirange',
+      3929: 'int8multirange[]',
+      3930: 'nummultirange',
+      3931: 'nummultirange[]',
+      3932: 'tsmultirange',
+      3933: 'tsmultirange[]',
+      3934: 'tstzmultirange',
+      3935: 'tstzmultirange[]',
+      3936: 'datemultirange',
+      3937: 'datemultirange[]',
+    };
+
+    return typeMap[dataTypeID] || `unknown_oid_${dataTypeID}`;
   }
 }

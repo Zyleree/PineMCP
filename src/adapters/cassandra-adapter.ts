@@ -1,6 +1,7 @@
 import { Client, types } from 'cassandra-driver';
 import { BaseDatabaseAdapter } from './base-database-adapter.js';
 import { QueryResult, TableInfo, DatabaseStats, ColumnInfo, IndexInfo } from '../types/database.js';
+import { ConnectionError, QueryError } from '../types/errors.js';
 
 export class CassandraAdapter extends BaseDatabaseAdapter {
   private client: Client | null = null;
@@ -45,7 +46,7 @@ export class CassandraAdapter extends BaseDatabaseAdapter {
 
   async executeQuery(query: string, parameters?: unknown[]): Promise<QueryResult> {
     if (!this.client) {
-      throw new Error('Database not connected');
+      throw new ConnectionError('Database not connected', 'cassandra');
     }
 
     try {
@@ -83,7 +84,7 @@ export class CassandraAdapter extends BaseDatabaseAdapter {
 
   async getTables(): Promise<TableInfo[]> {
     if (!this.client) {
-      throw new Error('Database not connected');
+      throw new ConnectionError('Database not connected', 'cassandra');
     }
 
     try {
@@ -112,7 +113,7 @@ export class CassandraAdapter extends BaseDatabaseAdapter {
 
   async getTableInfo(tableName: string): Promise<TableInfo | null> {
     if (!this.client) {
-      throw new Error('Database not connected');
+      throw new ConnectionError('Database not connected', 'cassandra');
     }
 
     try {
@@ -175,7 +176,7 @@ export class CassandraAdapter extends BaseDatabaseAdapter {
 
   async getDatabaseStats(): Promise<DatabaseStats> {
     if (!this.client) {
-      throw new Error('Database not connected');
+      throw new ConnectionError('Database not connected', 'cassandra');
     }
 
     try {

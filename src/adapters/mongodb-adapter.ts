@@ -1,6 +1,7 @@
 import { MongoClient, Db } from 'mongodb';
 import { BaseDatabaseAdapter } from './base-database-adapter.js';
 import { QueryResult, TableInfo, DatabaseStats, ColumnInfo, IndexInfo } from '../types/database.js';
+import { ConnectionError, TransactionError, QueryError } from '../types/errors.js';
 
 export class MongoDBAdapter extends BaseDatabaseAdapter {
   private client: MongoClient | null = null;
@@ -24,7 +25,10 @@ export class MongoDBAdapter extends BaseDatabaseAdapter {
       this.connected = true;
     } catch (error) {
       this.connected = false;
-      throw this.handleError(error);
+      throw new ConnectionError(
+        `Failed to connect to MongoDB: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        'mongodb'
+      );
     }
   }
 
@@ -41,7 +45,10 @@ export class MongoDBAdapter extends BaseDatabaseAdapter {
       }
       this.connected = false;
     } catch (error) {
-      throw this.handleError(error);
+      throw new ConnectionError(
+        `Failed to disconnect from MongoDB: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        'mongodb'
+      );
     }
   }
 
@@ -51,57 +58,91 @@ export class MongoDBAdapter extends BaseDatabaseAdapter {
 
   async executeQuery(query: string, _parameters?: unknown[]): Promise<QueryResult> {
     if (!this.db) {
-      throw new Error('Database not connected');
+      throw new ConnectionError('Database not connected', 'mongodb');
     }
 
     try {
-      // Parse MongoDB query (simplified JSON format)
-      const queryObj = JSON.parse(query);
-      const { collection, operation, filter, update, options } = queryObj;
-
-      if (!collection || !operation) {
-        throw new Error('Query must include collection and operation');
+      if (!query || typeof query !== 'string') {
+        throw new QueryError('Query must be a non-empty string', 'mongodb', query);
       }
 
-      const coll = this.db.collection(collection);
+      let queryObj: any;
+      try {
+        queryObj = JSON.parse(query);
+      } catch (parseError) {
+        throw new QueryError('Invalid JSON format in query', 'mongodb', query);
+      }
+
+      if (!queryObj || typeof queryObj !== 'object') {
+        throw new QueryError('Query must be a valid JSON object', 'mongodb', query);
+      }
+
+      const { collection, operation, filter, update, options } = queryObj;
+
+      if (!collection || typeof collection !== 'string') {
+        throw new QueryError('Query must include a valid collection name', 'mongodb', query);
+      }
+
+      if (!operation || typeof operation !== 'string') {
+        throw new QueryError('Query must include a valid operation', 'mongodb', query);
+      }
+
+      const sanitizedCollection = this.sanitizeCollectionName(collection);
+      if (!sanitizedCollection) {
+        throw new QueryError('Invalid collection name', 'mongodb', query);
+      }
+
+      const coll = this.db.collection(sanitizedCollection);
       let result: unknown;
+      
+      const sessionOptions = this.inTransaction && this.session ? { session: this.session } : {};
+
+      const sanitizedFilter = this.sanitizeObject(filter);
+      const sanitizedUpdate = this.sanitizeObject(update);
+      const sanitizedOptions = this.sanitizeObject(options);
 
       switch (operation.toLowerCase()) {
         case 'find':
-          result = await coll.find(filter || {}, options || {}).toArray();
+          result = await coll.find(sanitizedFilter || {}, { ...sanitizedOptions, ...sessionOptions }).toArray();
           break;
         case 'findone':
-          result = await coll.findOne(filter || {}, options || {});
+          result = await coll.findOne(sanitizedFilter || {}, { ...sanitizedOptions, ...sessionOptions });
           break;
         case 'insertone':
-          result = await coll.insertOne(update || {});
+          result = await coll.insertOne(sanitizedUpdate || {}, sessionOptions);
           break;
         case 'insertmany':
-          result = await coll.insertMany(Array.isArray(update) ? update : [update]);
+          result = await coll.insertMany(Array.isArray(sanitizedUpdate) ? sanitizedUpdate : [sanitizedUpdate], sessionOptions);
           break;
         case 'updateone':
-          result = await coll.updateOne(filter || {}, update || {}, options || {});
+          result = await coll.updateOne(sanitizedFilter || {}, sanitizedUpdate || {}, { ...sanitizedOptions, ...sessionOptions });
           break;
         case 'updatemany':
-          result = await coll.updateMany(filter || {}, update || {}, options || {});
+          result = await coll.updateMany(sanitizedFilter || {}, sanitizedUpdate || {}, { ...sanitizedOptions, ...sessionOptions });
           break;
         case 'deleteone':
-          result = await coll.deleteOne(filter || {}, options || {});
+          result = await coll.deleteOne(sanitizedFilter || {}, { ...sanitizedOptions, ...sessionOptions });
           break;
         case 'deletemany':
-          result = await coll.deleteMany(filter || {}, options || {});
+          result = await coll.deleteMany(sanitizedFilter || {}, { ...sanitizedOptions, ...sessionOptions });
           break;
         case 'count':
-          result = await coll.countDocuments(filter || {}, options || {});
+          result = await coll.countDocuments(sanitizedFilter || {}, { ...sanitizedOptions, ...sessionOptions });
           break;
         case 'distinct':
-          result = await coll.distinct(update as string, filter || {}, options || {});
+          if (typeof sanitizedUpdate !== 'string') {
+            throw new QueryError('Distinct operation requires a string field name', 'mongodb', query);
+          }
+          result = await coll.distinct(sanitizedUpdate, sanitizedFilter || {}, { ...sanitizedOptions, ...sessionOptions });
           break;
         case 'aggregate':
-          result = await coll.aggregate(Array.isArray(update) ? update : [update], options || {}).toArray();
+          if (!Array.isArray(sanitizedUpdate)) {
+            throw new QueryError('Aggregate operation requires an array of pipeline stages', 'mongodb', query);
+          }
+          result = await coll.aggregate(sanitizedUpdate, { ...sanitizedOptions, ...sessionOptions }).toArray();
           break;
         default:
-          throw new Error(`Unsupported MongoDB operation: ${operation}`);
+          throw new QueryError(`Unsupported MongoDB operation: ${operation}`, 'mongodb', query);
       }
 
       const rows = Array.isArray(result) ? result : [result];
@@ -117,13 +158,17 @@ export class MongoDBAdapter extends BaseDatabaseAdapter {
         })) : [],
       };
     } catch (error) {
-      throw this.handleError(error);
+      throw new QueryError(
+        `MongoDB operation failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        'mongodb',
+        query
+      );
     }
   }
 
   async getTables(): Promise<TableInfo[]> {
     if (!this.db) {
-      throw new Error('Database not connected');
+      throw new ConnectionError('Database not connected', 'mongodb');
     }
 
     try {
@@ -176,7 +221,7 @@ export class MongoDBAdapter extends BaseDatabaseAdapter {
 
   async getTableInfo(tableName: string): Promise<TableInfo | null> {
     if (!this.db) {
-      throw new Error('Database not connected');
+      throw new ConnectionError('Database not connected', 'mongodb');
     }
 
     try {
@@ -220,7 +265,7 @@ export class MongoDBAdapter extends BaseDatabaseAdapter {
 
   async getDatabaseStats(): Promise<DatabaseStats> {
     if (!this.db) {
-      throw new Error('Database not connected');
+      throw new ConnectionError('Database not connected', 'mongodb');
     }
 
     try {
@@ -250,38 +295,65 @@ export class MongoDBAdapter extends BaseDatabaseAdapter {
 
   async beginTransaction(): Promise<void> {
     if (this.inTransaction) {
-      throw new Error('Transaction already in progress');
+      throw new TransactionError('Transaction already in progress', 'mongodb');
     }
     
     if (!this.client) {
-      throw new Error('Database not connected');
+      throw new ConnectionError('Database not connected', 'mongodb');
     }
     
-    this.session = this.client.startSession();
-    this.session.startTransaction();
-    this.inTransaction = true;
+    try {
+      this.session = this.client.startSession();
+      this.session.startTransaction();
+      this.inTransaction = true;
+    } catch (error) {
+      this.session = null;
+      this.inTransaction = false;
+      throw new TransactionError(
+        `Failed to begin MongoDB transaction: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        'mongodb'
+      );
+    }
   }
 
   async commitTransaction(): Promise<void> {
     if (!this.inTransaction || !this.session) {
-      throw new Error('No transaction in progress');
+      throw new TransactionError('No transaction in progress', 'mongodb');
     }
     
-    await this.session.commitTransaction();
-    await this.session.endSession();
-    this.session = null;
-    this.inTransaction = false;
+    try {
+      await this.session.commitTransaction();
+      await this.session.endSession();
+      this.session = null;
+      this.inTransaction = false;
+    } catch (error) {
+      this.session = null;
+      this.inTransaction = false;
+      throw new TransactionError(
+        `Failed to commit MongoDB transaction: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        'mongodb'
+      );
+    }
   }
 
   async rollbackTransaction(): Promise<void> {
     if (!this.inTransaction || !this.session) {
-      throw new Error('No transaction in progress');
+      throw new TransactionError('No transaction in progress', 'mongodb');
     }
     
-    await this.session.abortTransaction();
-    await this.session.endSession();
-    this.session = null;
-    this.inTransaction = false;
+    try {
+      await this.session.abortTransaction();
+      await this.session.endSession();
+      this.session = null;
+      this.inTransaction = false;
+    } catch (error) {
+      this.session = null;
+      this.inTransaction = false;
+      throw new TransactionError(
+        `Failed to rollback MongoDB transaction: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        'mongodb'
+      );
+    }
   }
 
   isInTransaction(): boolean {
@@ -300,7 +372,6 @@ export class MongoDBAdapter extends BaseDatabaseAdapter {
   }
 
   protected formatQuery(query: string, _parameters?: unknown[]): string {
-    // MongoDB queries are JSON, so don't need parameter substitution
     return query;
   }
 
@@ -309,5 +380,61 @@ export class MongoDBAdapter extends BaseDatabaseAdapter {
       return error;
     }
     return new Error(`MongoDB error: ${String(error)}`);
+  }
+
+  /**
+   * Sanitize collection name to prevent injection attacks
+   */
+  private sanitizeCollectionName(collection: string): string | null {
+    const sanitized = collection.replace(/[^a-zA-Z0-9_-]/g, '');
+    
+    if (!sanitized || sanitized.length === 0 || sanitized.length > 120) {
+      return null;
+    }
+    
+    const reservedNames = ['system', 'admin', 'local', 'config'];
+    if (reservedNames.includes(sanitized.toLowerCase())) {
+      return null;
+    }
+    
+    return sanitized;
+  }
+
+  /**
+   * Sanitize MongoDB query objects to prevent NoSQL injection
+   * Note: This is a basic sanitization. For production use, consider using
+   * MongoDB's built-in parameterized queries or a proper ODM/ORM.
+   */
+  private sanitizeObject(obj: any): any {
+    if (obj === null || obj === undefined) {
+      return obj;
+    }
+    
+    if (typeof obj === 'string') {
+      return obj.replace(/\$\$where|\$where|\$eval/gi, (match) => {
+        if (match.toLowerCase() === '$where' || match.toLowerCase() === '$$where' || match.toLowerCase() === '$eval') {
+          throw new QueryError(`Dangerous MongoDB operator '${match}' is not allowed`, 'mongodb');
+        }
+        return match;
+      });
+    }
+    
+    if (Array.isArray(obj)) {
+      return obj.map(item => this.sanitizeObject(item));
+    }
+    
+    if (typeof obj === 'object') {
+      const sanitized: any = {};
+      for (const [key, value] of Object.entries(obj)) {
+        if (key.startsWith('$') && ['$where', '$$where', '$eval'].includes(key.toLowerCase())) {
+          throw new QueryError(`Dangerous MongoDB operator '${key}' is not allowed`, 'mongodb');
+        }
+        
+        sanitized[key] = this.sanitizeObject(value);
+      }
+      return sanitized;
+    }
+    
+    return obj;
   }
 }

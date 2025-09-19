@@ -13,6 +13,7 @@ import { MCPConfig } from '../types/mcp.js';
 import { SchemaManagementService } from './schema-management-service.js';
 import { DataExportImportService } from './data-export-import-service.js';
 import { QueryAnalysisService } from './query-analysis-service.js';
+import { ConnectionError, QueryError, ValidationError } from '../types/errors.js';
 
 export class MCPServerService {
   private server: Server;
@@ -632,12 +633,12 @@ export class MCPServerService {
     this.server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
       const currentDb = this.connectionManager.getConnection();
       if (!currentDb) {
-        throw new Error('No database connection');
+        throw new ConnectionError('No database connection');
       }
 
       const uri = request.params.uri;
       if (!uri.startsWith('table://')) {
-        throw new Error('Invalid resource URI');
+        throw new ValidationError('Invalid resource URI', 'uri', uri);
       }
 
       const remainder = uri.slice('table://'.length);
@@ -651,13 +652,13 @@ export class MCPServerService {
         tableName = parts.slice(1).join('/');
       }
       if (!tableName) {
-        throw new Error('Invalid table name in URI');
+        throw new ValidationError('Invalid table name in URI', 'tableName', tableName);
       }
 
       try {
         const tableInfo = await currentDb.getTableInfo(tableName, schema === 'default' ? undefined : schema);
         if (!tableInfo) {
-          throw new Error('Table not found');
+          throw new QueryError('Table not found', undefined, tableName);
         }
 
         return {
@@ -670,7 +671,7 @@ export class MCPServerService {
           ],
         };
       } catch (error) {
-        throw new Error(`Failed to read table info: ${error}`);
+        throw new QueryError(`Failed to read table info: ${error}`, undefined, tableName);
       }
     });
 
@@ -753,7 +754,7 @@ export class MCPServerService {
   private getConnection(connectionName?: string): BaseDatabaseAdapter {
     const connection = this.connectionManager.getConnection(connectionName);
     if (!connection) {
-      throw new Error(`No database connection${connectionName ? ` named '${connectionName}'` : ''} found`);
+      throw new ConnectionError(`No database connection${connectionName ? ` named '${connectionName}'` : ''} found`, connectionName || 'unknown');
     }
     return connection;
   }
@@ -761,7 +762,7 @@ export class MCPServerService {
   private async handleExecuteQuery(args: any): Promise<any> {
     const { query, parameters, connection } = args;
     if (!query) {
-      throw new Error('Query is required');
+      throw new QueryError('Query is required');
     }
 
     const db = this.getConnection(connection);
@@ -799,13 +800,13 @@ export class MCPServerService {
   private async handleGetTableInfo(args: any): Promise<any> {
     const { table_name, schema, connection } = args;
     if (!table_name) {
-      throw new Error('table_name is required');
+      throw new QueryError('table_name is required');
     }
 
     const db = this.getConnection(connection);
     const tableInfo = await db.getTableInfo(table_name, schema);
     if (!tableInfo) {
-      throw new Error(`Table ${table_name} not found`);
+      throw new QueryError(`Table ${table_name} not found`, connection, table_name);
     }
     
     return {
@@ -896,7 +897,7 @@ export class MCPServerService {
   private async handleExecuteBatch(args: any): Promise<any> {
     const { operations, connection } = args;
     if (!operations || !Array.isArray(operations)) {
-      throw new Error('operations array is required');
+      throw new ValidationError('operations array is required');
     }
 
     const db = this.getConnection(connection);
@@ -915,12 +916,12 @@ export class MCPServerService {
   private async handleAddConnection(args: any): Promise<any> {
     const { name, config } = args;
     if (!name || !config) {
-      throw new Error('name and config are required');
+      throw new ValidationError('name and config are required');
     }
 
     const validation = DatabaseAdapterFactory.validateConfig(config);
     if (!validation.valid) {
-      throw new Error(`Invalid configuration: ${validation.errors.join(', ')}`);
+      throw new ValidationError(`Invalid configuration: ${validation.errors.join(', ')}`);
     }
 
     await this.connectionManager.addConnection(name, config);
@@ -938,7 +939,7 @@ export class MCPServerService {
   private async handleRemoveConnection(args: any): Promise<any> {
     const { name } = args;
     if (!name) {
-      throw new Error('name is required');
+      throw new ValidationError('name is required');
     }
 
     await this.connectionManager.removeConnection(name);
@@ -969,7 +970,7 @@ export class MCPServerService {
   private async handleSwitchConnection(args: any): Promise<any> {
     const { name } = args;
     if (!name) {
-      throw new Error('name is required');
+      throw new ValidationError('name is required');
     }
 
     this.connectionManager.setCurrentConnection(name);
@@ -1000,7 +1001,7 @@ export class MCPServerService {
   private async handleCompareSchemas(args: any): Promise<any> {
     const { source_connection, target_connection } = args;
     if (!source_connection || !target_connection) {
-      throw new Error('source_connection and target_connection are required');
+      throw new ValidationError('source_connection and target_connection are required');
     }
 
     const result = await this.schemaService.compareSchemas(source_connection, target_connection);
@@ -1018,7 +1019,7 @@ export class MCPServerService {
   private async handleGenerateMigration(args: any): Promise<any> {
     const { source_connection, target_connection, migration_name } = args;
     if (!source_connection || !target_connection || !migration_name) {
-      throw new Error('source_connection, target_connection, and migration_name are required');
+      throw new ValidationError('source_connection, target_connection, and migration_name are required');
     }
 
     const migration = await this.schemaService.generateMigration(source_connection, target_connection, migration_name);
@@ -1036,7 +1037,7 @@ export class MCPServerService {
   private async handleGenerateDDL(args: any): Promise<any> {
     const { connection, include_data, include_indexes, include_constraints, format } = args;
     if (!connection) {
-      throw new Error('connection is required');
+      throw new ValidationError('connection is required');
     }
 
     const options = {
@@ -1064,7 +1065,7 @@ export class MCPServerService {
   private async handleValidateSchema(args: any): Promise<any> {
     const { connection } = args;
     if (!connection) {
-      throw new Error('connection is required');
+      throw new ValidationError('connection is required');
     }
 
     const result = await this.schemaService.validateSchema(connection);
@@ -1082,7 +1083,7 @@ export class MCPServerService {
   private async handleExportData(args: any): Promise<any> {
     const { connection, output_path, format, tables, where_clause, limit, include_schema, pretty_print } = args;
     if (!connection || !output_path || !format) {
-      throw new Error('connection, output_path, and format are required');
+      throw new ValidationError('connection, output_path, and format are required');
     }
 
     const options = {
@@ -1109,7 +1110,7 @@ export class MCPServerService {
   private async handleImportData(args: any): Promise<any> {
     const { connection, file_path, format, table_name, mode, batch_size, skip_errors, mapping } = args;
     if (!connection || !file_path || !format || !table_name) {
-      throw new Error('connection, file_path, format, and table_name are required');
+      throw new ValidationError('connection, file_path, format, and table_name are required');
     }
 
     const options = {
@@ -1136,7 +1137,7 @@ export class MCPServerService {
   private async handleAnalyzeQuery(args: any): Promise<any> {
     const { connection, query, parameters } = args;
     if (!connection || !query) {
-      throw new Error('connection and query are required');
+      throw new ValidationError('connection and query are required');
     }
 
     const result = await this.queryAnalysisService.analyzeQuery(connection, query, parameters || []);
@@ -1195,7 +1196,7 @@ export class MCPServerService {
   private async handleSaveQueryTemplate(args: any): Promise<any> {
     const { name, description, query, parameters, tags, connection_type } = args;
     if (!name || !description || !query || !parameters || !connection_type) {
-      throw new Error('name, description, query, parameters, and connection_type are required');
+      throw new ValidationError('name, description, query, parameters, and connection_type are required');
     }
 
     const template = await this.queryAnalysisService.saveTemplate({
@@ -1234,7 +1235,7 @@ export class MCPServerService {
   private async handleExecuteTemplate(args: any): Promise<any> {
     const { connection, template_id, parameters } = args;
     if (!connection || !template_id || !parameters) {
-      throw new Error('connection, template_id, and parameters are required');
+      throw new ValidationError('connection, template_id, and parameters are required');
     }
 
     const result = await this.queryAnalysisService.executeTemplate(connection, template_id, parameters);
@@ -1254,18 +1255,14 @@ export class MCPServerService {
       for (const db of this.config.databases) {
         try {
           await this.connectionManager.addConnection(db.name, db);
-          console.error(`Added connection: ${db.name} (${db.type})`);
         } catch (error) {
-          console.error(`Failed to add connection ${db.name}: ${error}`);
         }
       }
     } else {
-      console.error('No database connections configured');
     }
 
     const transport = new StdioServerTransport();
     await this.server.connect(transport);
-    console.error('PineMCP started');
   }
 
   async stop(): Promise<void> {

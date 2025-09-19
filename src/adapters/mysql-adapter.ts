@@ -1,6 +1,7 @@
 import mysql, { Connection, Pool, PoolConnection } from 'mysql2/promise';
 import { BaseDatabaseAdapter } from './base-database-adapter.js';
 import { QueryResult, TableInfo, DatabaseStats, ColumnInfo, IndexInfo, ConstraintInfo } from '../types/database.js';
+import { ConnectionError, TransactionError, QueryError } from '../types/errors.js';
 
 export class MySQLAdapter extends BaseDatabaseAdapter {
   private pool: Pool | null = null;
@@ -57,21 +58,30 @@ export class MySQLAdapter extends BaseDatabaseAdapter {
   async executeQuery(query: string, parameters?: unknown[]): Promise<QueryResult> {
     const connection = this.transactionConnection || this.connection;
     if (!connection) {
-      throw new Error('Database not connected');
+      throw new ConnectionError('Database not connected', 'mysql');
     }
 
-    const [rows, fields] = await connection.execute(query, parameters);
-    
-    return {
-      rows: Array.isArray(rows) ? rows as Record<string, unknown>[] : [],
-      rowCount: Array.isArray(rows) ? rows.length : 0,
-      fields: fields ? fields.map(field => ({
-        name: field.name,
-        dataType: field.type?.toString() || 'UNKNOWN',
-        nullable: !(field.flags && (field.flags as number & 1)), // NOT_NULL flag
-        defaultValue: undefined, // MySQL2 doesn't provide defaultValue in FieldPacket
-      })) : [],
-    };
+    try {
+      const [rows, fields] = await connection.execute(query, parameters);
+      
+      return {
+        rows: Array.isArray(rows) ? rows as Record<string, unknown>[] : [],
+        rowCount: Array.isArray(rows) ? rows.length : 0,
+        fields: fields ? fields.map(field => ({
+          name: field.name,
+          dataType: field.type?.toString() || 'UNKNOWN',
+          nullable: !(field.flags && (field.flags as number & 1)), // NOT_NULL flag
+          defaultValue: undefined, // MySQL2 doesn't provide defaultValue in FieldPacket
+        })) : [],
+      };
+    } catch (error) {
+      throw new QueryError(
+        `MySQL query failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        'mysql',
+        query,
+        parameters
+      );
+    }
   }
 
   async getTables(): Promise<TableInfo[]> {
@@ -271,31 +281,62 @@ export class MySQLAdapter extends BaseDatabaseAdapter {
 
   async beginTransaction(): Promise<void> {
     if (this.transactionConnection) {
-      throw new Error('Transaction already in progress');
+      throw new TransactionError('Transaction already in progress', 'mysql');
     }
     
-    this.transactionConnection = await this.pool!.getConnection();
-    await this.transactionConnection.execute('START TRANSACTION');
+    if (!this.pool) {
+      throw new ConnectionError('Database not connected', 'mysql');
+    }
+    
+    try {
+      this.transactionConnection = await this.pool.getConnection();
+      await this.transactionConnection.execute('START TRANSACTION');
+    } catch (error) {
+      if (this.transactionConnection) {
+        this.transactionConnection.release();
+        this.transactionConnection = null;
+      }
+      throw new TransactionError(
+        `Failed to begin MySQL transaction: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        'mysql'
+      );
+    }
   }
 
   async commitTransaction(): Promise<void> {
     if (!this.transactionConnection) {
-      throw new Error('No transaction in progress');
+      throw new TransactionError('No transaction in progress', 'mysql');
     }
     
-    await this.transactionConnection.execute('COMMIT');
-    this.transactionConnection.release();
-    this.transactionConnection = null;
+    try {
+      await this.transactionConnection.execute('COMMIT');
+    } catch (error) {
+      throw new TransactionError(
+        `Failed to commit MySQL transaction: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        'mysql'
+      );
+    } finally {
+      this.transactionConnection.release();
+      this.transactionConnection = null;
+    }
   }
 
   async rollbackTransaction(): Promise<void> {
     if (!this.transactionConnection) {
-      throw new Error('No transaction in progress');
+      throw new TransactionError('No transaction in progress', 'mysql');
     }
     
-    await this.transactionConnection.execute('ROLLBACK');
-    this.transactionConnection.release();
-    this.transactionConnection = null;
+    try {
+      await this.transactionConnection.execute('ROLLBACK');
+    } catch (error) {
+      throw new TransactionError(
+        `Failed to rollback MySQL transaction: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        'mysql'
+      );
+    } finally {
+      this.transactionConnection.release();
+      this.transactionConnection = null;
+    }
   }
 
   isInTransaction(): boolean {

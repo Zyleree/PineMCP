@@ -2,6 +2,7 @@ import { DynamoDBClient, ListTablesCommand, DescribeTableCommand } from '@aws-sd
 import { DynamoDBDocumentClient, ScanCommand as DocScanCommand, QueryCommand as DocQueryCommand } from '@aws-sdk/lib-dynamodb';
 import { BaseDatabaseAdapter } from './base-database-adapter.js';
 import { QueryResult, TableInfo, DatabaseStats, FieldInfo } from '../types/database.js';
+import { ConnectionError, QueryError } from '../types/errors.js';
 
 export class DynamoDBAdapter extends BaseDatabaseAdapter {
   private client: DynamoDBClient | null = null;
@@ -39,7 +40,7 @@ export class DynamoDBAdapter extends BaseDatabaseAdapter {
 
   async executeQuery(query: string, _parameters?: unknown[]): Promise<QueryResult> {
     if (!this.docClient) {
-      throw new Error('Not connected to database');
+      throw new ConnectionError('Not connected to database', 'dynamodb');
     }
 
     try {
@@ -79,16 +80,16 @@ export class DynamoDBAdapter extends BaseDatabaseAdapter {
           fields: this.mapFields(result.Items?.[0] || {}),
         };
       } else {
-        throw new Error('Unsupported operation. Use "scan" or "query"');
+        throw new QueryError('Unsupported operation. Use "scan" or "query"', 'dynamodb', query);
       }
     } catch (error) {
-      throw new Error(`Query execution failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      throw new QueryError(`Query execution failed: ${error instanceof Error ? error.message : 'Unknown error'}`, 'dynamodb', query);
     }
   }
 
   async getTables(): Promise<TableInfo[]> {
     if (!this.client) {
-      throw new Error('Not connected to database');
+      throw new ConnectionError('Not connected to database', 'dynamodb');
     }
 
     const command = new ListTablesCommand({});
@@ -118,7 +119,7 @@ export class DynamoDBAdapter extends BaseDatabaseAdapter {
 
   async getTableInfo(tableName: string, _schema?: string): Promise<TableInfo | null> {
     if (!this.client) {
-      throw new Error('Not connected to database');
+      throw new ConnectionError('Not connected to database', 'dynamodb');
     }
 
     const command = new DescribeTableCommand({ TableName: tableName });
@@ -126,7 +127,7 @@ export class DynamoDBAdapter extends BaseDatabaseAdapter {
     const table = result.Table;
 
     if (!table) {
-      throw new Error(`Table ${tableName} not found`);
+      throw new QueryError(`Table ${tableName} not found`, 'dynamodb');
     }
 
     // Get attribute definitions
@@ -169,7 +170,7 @@ export class DynamoDBAdapter extends BaseDatabaseAdapter {
 
   async getDatabaseStats(): Promise<DatabaseStats> {
     if (!this.client) {
-      throw new Error('Not connected to database');
+      throw new ConnectionError('Not connected to database', 'dynamodb');
     }
 
     const tables = await this.getTables();

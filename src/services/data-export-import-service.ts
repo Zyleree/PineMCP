@@ -2,6 +2,7 @@ import { BaseDatabaseAdapter } from '../adapters/base-database-adapter.js';
 import { DatabaseConnectionManager } from '../adapters/database-connection-manager.js';
 import { ExportOptions, ImportOptions } from '../types/schema.js';
 import { writeFileSync, readFileSync } from 'fs';
+import { ConnectionError, QueryError } from '../types/errors.js';
 
 export class DataExportImportService {
   private connectionManager: DatabaseConnectionManager;
@@ -20,7 +21,7 @@ export class DataExportImportService {
   ): Promise<{ success: boolean; message: string; recordCount: number }> {
     const db = this.connectionManager.getConnection(connectionName);
     if (!db) {
-      throw new Error('Connection not found');
+      throw new ConnectionError('Connection not found', connectionName);
     }
 
     const sqlLike = ['postgresql', 'mysql', 'sqlite', 'mssql'];
@@ -223,7 +224,7 @@ export class DataExportImportService {
   ): Promise<{ success: boolean; message: string; recordCount: number }> {
     const db = this.connectionManager.getConnection(connectionName);
     if (!db) {
-      throw new Error('Connection not found');
+      throw new ConnectionError('Connection not found', connectionName);
     }
 
     try {
@@ -513,7 +514,6 @@ export class DataExportImportService {
         if (!options.skipErrors) {
           throw error;
         }
-        console.warn(`Error importing record: ${error}`);
       }
     }
   }

@@ -1,6 +1,7 @@
 import sqlite3 from 'sqlite3';
 import { BaseDatabaseAdapter } from './base-database-adapter.js';
 import { QueryResult, TableInfo, DatabaseStats, ColumnInfo, IndexInfo, ConstraintInfo } from '../types/database.js';
+import { ConnectionError, TransactionError, QueryError } from '../types/errors.js';
 
 export class SQLiteAdapter extends BaseDatabaseAdapter {
   private db: sqlite3.Database | null = null;
@@ -57,7 +58,7 @@ export class SQLiteAdapter extends BaseDatabaseAdapter {
 
   async executeQuery(query: string, parameters?: unknown[]): Promise<QueryResult> {
     if (!this.db) {
-      throw new Error('Database not connected');
+      throw new ConnectionError('Database not connected', 'sqlite');
     }
 
     return new Promise<QueryResult>((resolve, reject) => {
@@ -281,7 +282,7 @@ export class SQLiteAdapter extends BaseDatabaseAdapter {
 
   async beginTransaction(): Promise<void> {
     if (this.inTransaction) {
-      throw new Error('Transaction already in progress');
+      throw new TransactionError('Transaction already in progress', 'sqlite');
     }
     
     await this.executeQuery('BEGIN TRANSACTION');
@@ -290,7 +291,7 @@ export class SQLiteAdapter extends BaseDatabaseAdapter {
 
   async commitTransaction(): Promise<void> {
     if (!this.inTransaction) {
-      throw new Error('No transaction in progress');
+      throw new TransactionError('No transaction in progress', 'sqlite');
     }
     
     await this.executeQuery('COMMIT');
@@ -299,7 +300,7 @@ export class SQLiteAdapter extends BaseDatabaseAdapter {
 
   async rollbackTransaction(): Promise<void> {
     if (!this.inTransaction) {
-      throw new Error('No transaction in progress');
+      throw new TransactionError('No transaction in progress', 'sqlite');
     }
     
     await this.executeQuery('ROLLBACK');
@@ -321,13 +322,49 @@ export class SQLiteAdapter extends BaseDatabaseAdapter {
     }
     
     let formattedQuery = query;
-    parameters.forEach((param, _index) => {
-      const placeholder = '?';
-      const value = typeof param === 'string' ? `'${param.replace(/'/g, "''")}'` : String(param);
-      formattedQuery = formattedQuery.replace(placeholder, value);
-    });
+    let paramIndex = 0;
+    
+    // Replace all ? placeholders with actual parameter values
+    for (let i = 0; i < formattedQuery.length; i++) {
+      if (formattedQuery[i] === '?' && paramIndex < parameters.length) {
+        const param = parameters[paramIndex];
+        const value = this.formatParameter(param);
+        formattedQuery = formattedQuery.substring(0, i) + value + formattedQuery.substring(i + 1);
+        paramIndex++;
+        i += value.length - 1; // Adjust index for the replaced value
+      }
+    }
     
     return formattedQuery;
+  }
+
+  /**
+   * Format a parameter value for SQLite
+   */
+  private formatParameter(param: unknown): string {
+    if (param === null || param === undefined) {
+      return 'NULL';
+    }
+    
+    if (typeof param === 'string') {
+      // Escape single quotes by doubling them
+      return `'${param.replace(/'/g, "''")}'`;
+    }
+    
+    if (typeof param === 'number') {
+      return String(param);
+    }
+    
+    if (typeof param === 'boolean') {
+      return param ? '1' : '0';
+    }
+    
+    if (param instanceof Date) {
+      return `'${param.toISOString()}'`;
+    }
+    
+    // For other types, convert to string and escape
+    return `'${String(param).replace(/'/g, "''")}'`;
   }
 
   protected handleError(error: unknown): Error {

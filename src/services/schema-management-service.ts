@@ -5,6 +5,17 @@ import {
   MigrationStep, 
   DDLGenerationOptions 
 } from '../types/schema.js';
+import { TableInfo, ColumnInfo } from '../types/database.js';
+import { ConnectionError, QueryError } from '../types/errors.js';
+
+interface SchemaDifference {
+  type: 'table_added' | 'table_removed' | 'table_modified' | 'column_added' | 'column_removed' | 'column_modified' | 'index_added' | 'index_removed' | 'index_modified' | 'constraint_added' | 'constraint_removed' | 'constraint_modified';
+  tableName: string;
+  columnName?: string;
+  details: string;
+  sourceValue?: any;
+  targetValue?: any;
+}
 
 export class SchemaManagementService {
   private connectionManager: DatabaseConnectionManager;
@@ -24,7 +35,7 @@ export class SchemaManagementService {
     const targetDb = this.connectionManager.getConnection(targetConnection);
 
     if (!sourceDb || !targetDb) {
-      throw new Error('One or both connections not found');
+      throw new ConnectionError('One or both connections not found');
     }
 
     const sourceTables = await sourceDb.getTables();
@@ -48,13 +59,42 @@ export class SchemaManagementService {
         });
         tablesAdded++;
       } else {
-        const sourceInfo = await sourceDb.getTableInfo(sourceTable.name);
-        const targetInfo = await targetDb.getTableInfo(targetTable.name);
-        
-        const tableDiffs = this.compareTableStructures(sourceTable.name, sourceInfo, targetInfo);
-        differences.push(...tableDiffs);
-        
-        if (tableDiffs.length > 0) {
+        try {
+          const sourceInfo = await sourceDb.getTableInfo(sourceTable.name);
+          const targetInfo = await targetDb.getTableInfo(targetTable.name);
+          
+          if (!sourceInfo) {
+            differences.push({
+              type: 'table_modified',
+              tableName: sourceTable.name,
+              details: `Table '${sourceTable.name}' exists in source but cannot be accessed`,
+            });
+            tablesModified++;
+            continue;
+          }
+          
+          if (!targetInfo) {
+            differences.push({
+              type: 'table_modified',
+              tableName: sourceTable.name,
+              details: `Table '${sourceTable.name}' exists in target but cannot be accessed`,
+            });
+            tablesModified++;
+            continue;
+          }
+          
+          const tableDiffs = this.compareTableStructures(sourceTable.name, sourceInfo, targetInfo);
+          differences.push(...tableDiffs);
+          
+          if (tableDiffs.length > 0) {
+            tablesModified++;
+          }
+        } catch (error) {
+          differences.push({
+            type: 'table_modified',
+            tableName: sourceTable.name,
+            details: `Error comparing table '${sourceTable.name}': ${error instanceof Error ? error.message : 'Unknown error'}`,
+          });
           tablesModified++;
         }
       }
@@ -97,10 +137,14 @@ export class SchemaManagementService {
    */
   private compareTableStructures(
     tableName: string,
-    sourceInfo: any,
-    targetInfo: any
-  ): any[] {
-    const differences: any[] = [];
+    sourceInfo: TableInfo | null,
+    targetInfo: TableInfo | null
+  ): SchemaDifference[] {
+    const differences: SchemaDifference[] = [];
+    
+    if (!sourceInfo || !targetInfo) {
+      return differences;
+    }
     
     const sourceColumns = sourceInfo.columns || [];
     const targetColumns = targetInfo.columns || [];
@@ -176,12 +220,19 @@ export class SchemaManagementService {
   /**
    * Compare column properties
    */
-  private compareColumnProperties(sourceCol: any, targetCol: any): string[] {
+  private compareColumnProperties(sourceCol: ColumnInfo, targetCol: ColumnInfo): string[] {
     const differences: string[] = [];
 
-    if (sourceCol.type !== targetCol.type) {
-      differences.push(`type: ${sourceCol.type} vs ${targetCol.type}`);
+    if (!sourceCol || !targetCol) {
+      return differences;
     }
+
+    const sourceType = sourceCol.dataType;
+    const targetType = targetCol.dataType;
+    if (sourceType !== targetType) {
+      differences.push(`type: ${sourceType} vs ${targetType}`);
+    }
+
     if (sourceCol.nullable !== targetCol.nullable) {
       differences.push(`nullable: ${sourceCol.nullable} vs ${targetCol.nullable}`);
     }
@@ -206,7 +257,7 @@ export class SchemaManagementService {
     const comparison = await this.compareSchemas(sourceConnection, targetConnection);
     
     if (comparison.identical) {
-      throw new Error('Schemas are identical, no migration needed');
+      throw new QueryError('Schemas are identical, no migration needed');
     }
 
     const steps: MigrationStep[] = [];
@@ -332,7 +383,7 @@ export class SchemaManagementService {
   ): Promise<string> {
     const db = this.connectionManager.getConnection(connectionName);
     if (!db) {
-      throw new Error('Connection not found');
+      throw new ConnectionError('Connection not found', connectionName);
     }
 
     const tables = await db.getTables();
@@ -418,7 +469,7 @@ export class SchemaManagementService {
   async validateSchema(connectionName: string): Promise<{ valid: boolean; issues: string[] }> {
     const db = this.connectionManager.getConnection(connectionName);
     if (!db) {
-      throw new Error('Connection not found');
+      throw new ConnectionError('Connection not found', connectionName);
     }
 
     const issues: string[] = [];
@@ -439,7 +490,7 @@ export class SchemaManagementService {
 
         const columns = tableInfo.columns || [];
         for (const col of columns) {
-          if (!col.dataType && !(col as any).type) {
+          if (!col.dataType && !('type' in col)) {
             issues.push(`Column '${col.name}' in table '${table.name}' has no type`);
           }
         }

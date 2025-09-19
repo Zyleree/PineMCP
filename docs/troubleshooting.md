@@ -1,6 +1,6 @@
 # Troubleshooting
 
-Common issues and resolutions when running PineMCP.
+Common issues and resolutions when running PineMCP v2.1.0+.
 
 ## Node or Runtime Issues
 - Error: "Unexpected token" or ESM import errors
@@ -8,6 +8,14 @@ Common issues and resolutions when running PineMCP.
 - Permission denied writing config (2.0.0+)
   - PineMCP no longer writes `config/`. Define connections in your MCP client.
   - Only `data/` is written (query history/templates). For Docker, mount a writable data volume, e.g.: `-v "$PWD/data:/app/data"`.
+
+## v2.1.0 Bug Fixes
+- **MSSQL Transactions**: Fixed broken transaction support - now properly implements `beginTransaction()`, `commitTransaction()`, and `rollbackTransaction()`
+- **PostgreSQL Field Types**: Fixed field type mapping showing OID numbers instead of readable names
+- **Redis Transactions**: Implemented proper MULTI/EXEC transaction support
+- **MongoDB Sessions**: Fixed queries not using sessions during transactions
+- **Error Handling**: All services now use structured error classes with proper context
+- **Type Safety**: Eliminated all unsafe type assertions and improved type safety
 
 ## Connection Problems
 - "No database connection configured"

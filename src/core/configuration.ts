@@ -1,9 +1,10 @@
-import { readFileSync, existsSync } from 'fs';
+import { readFileSync, existsSync, writeFileSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { MCPConfig } from '../types/mcp.js';
 import { DatabaseConfig } from '../types/database.js';
 import { DatabaseAdapterFactory } from '../adapters/database-adapter-factory.js';
+import { ConfigurationError } from '../types/errors.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -28,8 +29,22 @@ export class Configuration {
     return this.mergeDiscoveredMCPJsonDatabases(empty);
   }
 
-  static save(_config: MCPConfig): void {
-    return;
+  static save(config: MCPConfig): void {
+    try {
+      const configDir = join(__dirname, '../../config');
+      if (!existsSync(configDir)) {
+        mkdirSync(configDir, { recursive: true });
+      }
+      
+      const configPath = join(configDir, 'mcp-config.json');
+      const configData = JSON.stringify(config, null, 2);
+      writeFileSync(configPath, configData, 'utf8');
+    } catch (error) {
+      throw new ConfigurationError(
+        `Failed to save configuration: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        join(__dirname, '../../config/mcp-config.json')
+      );
+    }
   }
 
 
@@ -66,7 +81,7 @@ export class Configuration {
           return {
             type: 'sqlite',
             filename: parsedUrl.pathname,
-          } as unknown as DatabaseConfig;
+          } as DatabaseConfig;
         case 'redis:':
           return {
             type: 'redis',
@@ -74,7 +89,7 @@ export class Configuration {
             port: parsedUrl.port ? parseInt(parsedUrl.port) : 6379,
             db: parsedUrl.pathname.slice(1) ? parseInt(parsedUrl.pathname.slice(1)) : 0,
             password: parsedUrl.password,
-          } as unknown as DatabaseConfig;
+          } as DatabaseConfig;
         case 'mongodb:':
           return {
             type: 'mongodb',
@@ -84,7 +99,7 @@ export class Configuration {
             username: parsedUrl.username,
             password: parsedUrl.password,
             authSource: parsedUrl.searchParams.get('authSource') || undefined,
-          } as unknown as DatabaseConfig;
+          } as DatabaseConfig;
         case 'cassandra:':
           return {
             type: 'cassandra',
@@ -94,7 +109,7 @@ export class Configuration {
             username: parsedUrl.username,
             password: parsedUrl.password,
             datacenter: parsedUrl.searchParams.get('datacenter') || 'datacenter1',
-          } as unknown as DatabaseConfig;
+          } as DatabaseConfig;
         case 'mssql:':
           return {
             type: 'mssql',
@@ -103,13 +118,13 @@ export class Configuration {
             database: parsedUrl.pathname.slice(1),
             username: parsedUrl.username,
             password: parsedUrl.password,
-          } as unknown as DatabaseConfig;
+          } as DatabaseConfig;
         case 'dynamodb:':
           return {
             type: 'dynamodb',
             region: parsedUrl.searchParams.get('region') || undefined,
             endpoint: parsedUrl.origin !== 'null' ? `${parsedUrl.protocol}//${parsedUrl.host}` : undefined,
-          } as unknown as DatabaseConfig;
+          } as DatabaseConfig;
         default:
           return null;
       }
@@ -140,14 +155,14 @@ export class Configuration {
                   const parsed = this.parseDatabaseUrl(entry);
                   if (parsed) {
                     const name = this.deriveConnectionNameFromUrl(entry, parsed, `mcp-db-${index + 1}`);
-                    discovered.push({ name, cfg: { name, ...parsed } as unknown as DatabaseConfig });
+                    discovered.push({ name, cfg: { name, ...parsed } as DatabaseConfig });
                   }
                 } else if (entry && typeof entry === 'object') {
                   if (entry.url && typeof entry.url === 'string') {
                     const parsed = this.parseDatabaseUrl(entry.url);
                     if (parsed) {
                       const name = (entry.name && String(entry.name)) || this.deriveConnectionNameFromUrl(entry.url, parsed, `mcp-db-${index + 1}`);
-                      discovered.push({ name, cfg: { name, ...parsed } as unknown as DatabaseConfig });
+                      discovered.push({ name, cfg: { name, ...parsed } as DatabaseConfig });
                     }
                   } else if (entry.type) {
                     const name = (entry.name && String(entry.name)) || `mcp-db-${index + 1}`;
@@ -165,14 +180,14 @@ export class Configuration {
                   const parsed = this.parseDatabaseUrl(value);
                   if (parsed) {
                     const name = this.normalizeName(key) || this.deriveConnectionNameFromUrl(value, parsed, `mcp-db-${index + 1}`);
-                    discovered.push({ name, cfg: { name, ...parsed } as unknown as DatabaseConfig });
+                    discovered.push({ name, cfg: { name, ...parsed } as DatabaseConfig });
                   }
                 } else if (value && typeof value === 'object') {
                   if (value.url && typeof value.url === 'string') {
                     const parsed = this.parseDatabaseUrl(value.url);
                     if (parsed) {
                       const name = (value.name && String(value.name)) || this.normalizeName(key) || this.deriveConnectionNameFromUrl(value.url, parsed, `mcp-db-${index + 1}`);
-                      discovered.push({ name, cfg: { name, ...parsed } as unknown as DatabaseConfig });
+                      discovered.push({ name, cfg: { name, ...parsed } as DatabaseConfig });
                     }
                   } else if (value.type) {
                     const name = (value.name && String(value.name)) || this.normalizeName(key) || `mcp-db-${index + 1}`;
@@ -191,14 +206,14 @@ export class Configuration {
                 const parsed = this.parseDatabaseUrl(entry);
                 if (parsed) {
                   const name = this.deriveConnectionNameFromUrl(entry, parsed, `mcp-db-${index + 1}`);
-                  discovered.push({ name, cfg: { name, ...parsed } as unknown as DatabaseConfig });
+                  discovered.push({ name, cfg: { name, ...parsed } as DatabaseConfig });
                 }
               } else if (entry && typeof entry === 'object') {
                 if (entry.url && typeof entry.url === 'string') {
                   const parsed = this.parseDatabaseUrl(entry.url);
                   if (parsed) {
                     const name = (entry.name && String(entry.name)) || this.deriveConnectionNameFromUrl(entry.url, parsed, `mcp-db-${index + 1}`);
-                    discovered.push({ name, cfg: { name, ...parsed } as unknown as DatabaseConfig });
+                    discovered.push({ name, cfg: { name, ...parsed } as DatabaseConfig });
                   }
                 } else if (entry.type) {
                   const name = (entry.name && String(entry.name)) || `mcp-db-${index + 1}`;
@@ -219,7 +234,7 @@ export class Configuration {
       ...config.databases,
       ...discovered
         .filter(d => !existingNames.has(d.name))
-        .map(d => ({ name: d.name, ...d.cfg } as any)),
+        .map(d => ({ name: d.name, ...d.cfg } as DatabaseConfig)),
     ];
     return { ...config, databases: merged } as MCPConfig;
   }
@@ -261,8 +276,8 @@ export class Configuration {
     try {
       const u = new URL(url);
       const host = u.hostname || 'localhost';
-      const dbName = (u.pathname || '').replace(/^\//, '') || (parsed as any)['database'] || (parsed as any)['keyspace'] || '';
-      const scheme = (u.protocol || '').replace(':', '') || (parsed as any)['type'];
+      const dbName = (u.pathname || '').replace(/^\//, '') || (parsed as Record<string, unknown>)['database'] || (parsed as Record<string, unknown>)['keyspace'] || '';
+      const scheme = (u.protocol || '').replace(':', '') || (parsed as Record<string, unknown>)['type'];
       const base = dbName ? `${scheme}-${host}-${dbName}` : `${scheme}-${host}`;
       return base.toLowerCase();
     } catch {

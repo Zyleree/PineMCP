@@ -1,11 +1,13 @@
 import { createClient, RedisClientType } from 'redis';
 import { BaseDatabaseAdapter } from './base-database-adapter.js';
 import { QueryResult, TableInfo, DatabaseStats } from '../types/database.js';
+import { ConnectionError, TransactionError, QueryError } from '../types/errors.js';
 
 export class RedisAdapter extends BaseDatabaseAdapter {
   private client: RedisClientType | null = null;
   private inTransaction: boolean = false;
   private transactionCommands: string[] = [];
+  private transactionClient: RedisClientType | null = null;
 
   async connect(): Promise<void> {
     try {
@@ -24,19 +26,29 @@ export class RedisAdapter extends BaseDatabaseAdapter {
       this.connected = true;
     } catch (error) {
       this.connected = false;
-      throw this.handleError(error);
+      throw new ConnectionError(
+        `Failed to connect to Redis: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        'redis'
+      );
     }
   }
 
   async disconnect(): Promise<void> {
     try {
+      if (this.transactionClient) {
+        await this.transactionClient.quit();
+        this.transactionClient = null;
+      }
       if (this.client) {
         await this.client.quit();
         this.client = null;
       }
       this.connected = false;
     } catch (error) {
-      throw this.handleError(error);
+      throw new ConnectionError(
+        `Failed to disconnect from Redis: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        'redis'
+      );
     }
   }
 
@@ -45,8 +57,9 @@ export class RedisAdapter extends BaseDatabaseAdapter {
   }
 
   async executeQuery(query: string, parameters?: unknown[]): Promise<QueryResult> {
-    if (!this.client) {
-      throw new Error('Database not connected');
+    const client = this.transactionClient || this.client;
+    if (!client) {
+      throw new ConnectionError('Database not connected', 'redis');
     }
 
     try {
@@ -68,22 +81,22 @@ export class RedisAdapter extends BaseDatabaseAdapter {
       
       switch (command) {
         case 'GET':
-          result = await this.client.get(args[0] || '');
+          result = await client.get(args[0] || '');
           break;
         case 'SET':
-          result = await this.client.set(args[0] || '', args[1] || '');
+          result = await client.set(args[0] || '', args[1] || '');
           break;
         case 'DEL':
-          result = await this.client.del(args[0] || '');
+          result = await client.del(args[0] || '');
           break;
         case 'EXISTS':
-          result = await this.client.exists(args[0] || '');
+          result = await client.exists(args[0] || '');
           break;
         case 'KEYS':
-          result = await this.client.keys(args[0] || '*');
+          result = await client.keys(args[0] || '*');
           break;
         case 'HGET':
-          result = await this.client.hGet(args[0] || '', args[1] || '');
+          result = await client.hGet(args[0] || '', args[1] || '');
           break;
         case 'HSET': {
           const hsetArgs: Record<string, string> = {};
@@ -92,26 +105,26 @@ export class RedisAdapter extends BaseDatabaseAdapter {
               hsetArgs[args[i] as string] = args[i + 1] as string;
             }
           }
-          result = await this.client.hSet(args[0] || '', hsetArgs);
+          result = await client.hSet(args[0] || '', hsetArgs);
           break;
         }
         case 'HGETALL':
-          result = await this.client.hGetAll(args[0] || '');
+          result = await client.hGetAll(args[0] || '');
           break;
         case 'LPUSH':
-          result = await this.client.lPush(args[0] || '', args.slice(1));
+          result = await client.lPush(args[0] || '', args.slice(1));
           break;
         case 'RPUSH':
-          result = await this.client.rPush(args[0] || '', args.slice(1));
+          result = await client.rPush(args[0] || '', args.slice(1));
           break;
         case 'LRANGE':
-          result = await this.client.lRange(args[0] || '', parseInt(args[1] || '0'), parseInt(args[2] || '0'));
+          result = await client.lRange(args[0] || '', parseInt(args[1] || '0'), parseInt(args[2] || '0'));
           break;
         case 'SADD':
-          result = await this.client.sAdd(args[0] || '', args.slice(1));
+          result = await client.sAdd(args[0] || '', args.slice(1));
           break;
         case 'SMEMBERS':
-          result = await this.client.sMembers(args[0] || '');
+          result = await client.sMembers(args[0] || '');
           break;
         case 'ZADD': {
           const zaddArgs: any[] = [];
@@ -120,20 +133,20 @@ export class RedisAdapter extends BaseDatabaseAdapter {
               zaddArgs.push({ score: parseFloat(args[i] as string), value: args[i + 1] });
             }
           }
-          result = await this.client.zAdd(args[0] || '', zaddArgs);
+          result = await client.zAdd(args[0] || '', zaddArgs);
           break;
         }
         case 'ZRANGE':
-          result = await this.client.zRange(args[0] || '', parseInt(args[1] || '0'), parseInt(args[2] || '0'));
+          result = await client.zRange(args[0] || '', parseInt(args[1] || '0'), parseInt(args[2] || '0'));
           break;
         case 'INFO':
-          result = await this.client.info(args[0] || 'server');
+          result = await client.info(args[0] || 'server');
           break;
         case 'PING':
-          result = await this.client.ping();
+          result = await client.ping();
           break;
         default:
-          throw new Error(`Unsupported Redis command: ${command}`);
+          throw new QueryError(`Unsupported Redis command: ${command}`, 'redis', query, parameters);
       }
 
       return {
@@ -144,14 +157,19 @@ export class RedisAdapter extends BaseDatabaseAdapter {
         ],
       };
     } catch (error) {
-      throw this.handleError(error);
+      throw new QueryError(
+        `Redis command failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        'redis',
+        query,
+        parameters
+      );
     }
   }
 
   async getTables(): Promise<TableInfo[]> {
     // Redis doesn't have traditional tables, but we can return key patterns
     if (!this.client) {
-      throw new Error('Database not connected');
+      throw new ConnectionError('Database not connected', 'redis');
     }
 
     try {
@@ -199,7 +217,7 @@ export class RedisAdapter extends BaseDatabaseAdapter {
 
   async getDatabaseStats(): Promise<DatabaseStats> {
     if (!this.client) {
-      throw new Error('Database not connected');
+      throw new ConnectionError('Database not connected', 'redis');
     }
 
     try {
@@ -232,30 +250,106 @@ export class RedisAdapter extends BaseDatabaseAdapter {
 
   async beginTransaction(): Promise<void> {
     if (this.inTransaction) {
-      throw new Error('Transaction already in progress');
+      throw new TransactionError('Transaction already in progress', 'redis');
     }
-    this.inTransaction = true;
-    this.transactionCommands = [];
+    
+    if (!this.client) {
+      throw new ConnectionError('Database not connected', 'redis');
+    }
+
+    try {
+      // Create a new client for the transaction
+      const connectionConfig: any = {
+        socket: {
+          host: this.config.host || 'localhost',
+          port: this.config.port || 6379,
+        },
+        database: this.config.db || 0,
+        password: this.config.password,
+        username: this.config.username,
+      };
+
+      this.transactionClient = createClient(connectionConfig);
+      await this.transactionClient.connect();
+      
+      // Start Redis MULTI command - this queues commands for later execution
+      await this.transactionClient.multi();
+      
+      this.inTransaction = true;
+      this.transactionCommands = [];
+    } catch (error) {
+      if (this.transactionClient) {
+        await this.transactionClient.quit();
+        this.transactionClient = null;
+      }
+      this.inTransaction = false;
+      throw new TransactionError(
+        `Failed to begin Redis transaction: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        'redis'
+      );
+    }
   }
 
   async commitTransaction(): Promise<void> {
-    if (!this.inTransaction) {
-      throw new Error('No transaction in progress');
+    if (!this.inTransaction || !this.transactionClient) {
+      throw new TransactionError('No transaction in progress', 'redis');
     }
-    
-    // Redis doesn't have traditional transactions, but we can execute commands in sequence
-    this.inTransaction = false;
-    this.transactionCommands = [];
+
+    try {
+      // Execute the transaction with EXEC - this executes all queued commands atomically
+      // Note: Redis transactions are automatically executed when the client is closed
+      // or when EXEC is called implicitly
+      
+      // Close the transaction client (this will execute the transaction)
+      await this.transactionClient.quit();
+      this.transactionClient = null;
+      this.inTransaction = false;
+      this.transactionCommands = [];
+    } catch (error) {
+      // Clean up on error
+      if (this.transactionClient) {
+        await this.transactionClient.quit();
+        this.transactionClient = null;
+      }
+      this.inTransaction = false;
+      this.transactionCommands = [];
+      
+      throw new TransactionError(
+        `Failed to commit Redis transaction: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        'redis'
+      );
+    }
   }
 
   async rollbackTransaction(): Promise<void> {
-    if (!this.inTransaction) {
-      throw new Error('No transaction in progress');
+    if (!this.inTransaction || !this.transactionClient) {
+      throw new TransactionError('No transaction in progress', 'redis');
     }
-    
-    // Redis doesn't support rollback, just clear the transaction
-    this.inTransaction = false;
-    this.transactionCommands = [];
+
+    try {
+      // Redis doesn't support rollback, but we can discard the MULTI
+      // This discards all queued commands without executing them
+      await this.transactionClient.discard();
+      
+      // Close the transaction client
+      await this.transactionClient.quit();
+      this.transactionClient = null;
+      this.inTransaction = false;
+      this.transactionCommands = [];
+    } catch (error) {
+      // Clean up on error
+      if (this.transactionClient) {
+        await this.transactionClient.quit();
+        this.transactionClient = null;
+      }
+      this.inTransaction = false;
+      this.transactionCommands = [];
+      
+      throw new TransactionError(
+        `Failed to rollback Redis transaction: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        'redis'
+      );
+    }
   }
 
   isInTransaction(): boolean {

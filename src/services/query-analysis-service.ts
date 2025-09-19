@@ -3,12 +3,14 @@ import { DatabaseConnectionManager } from '../adapters/database-connection-manag
 import { QueryAnalysisResult, QueryTemplate } from '../types/schema.js';
 import { writeFileSync, readFileSync, existsSync, mkdirSync } from 'fs';
 import { join } from 'path';
+import { ConnectionError, QueryError } from '../types/errors.js';
 
 export class QueryAnalysisService {
   private connectionManager: DatabaseConnectionManager;
   private queryHistory: QueryAnalysisResult[] = [];
   private templates: QueryTemplate[] = [];
   private templatesPath: string;
+  private readonly MAX_HISTORY_SIZE = 1000;
 
   constructor(connectionManager: DatabaseConnectionManager) {
     this.connectionManager = connectionManager;
@@ -26,7 +28,7 @@ export class QueryAnalysisService {
   ): Promise<QueryAnalysisResult> {
     const db = this.connectionManager.getConnection(connectionName);
     if (!db) {
-      throw new Error('Connection not found');
+      throw new ConnectionError('Connection not found', connectionName);
     }
 
     const startTime = Date.now();
@@ -52,7 +54,7 @@ export class QueryAnalysisService {
         performance,
       };
 
-      this.queryHistory.push(analysis);
+      this.addToHistory(analysis);
       this.saveQueryHistory();
 
       return analysis;
@@ -172,6 +174,17 @@ export class QueryAnalysisService {
       };
     } catch (error) {
       return null;
+    }
+  }
+
+  /**
+   * Add query to history with size limit management
+   */
+  private addToHistory(analysis: QueryAnalysisResult): void {
+    this.queryHistory.push(analysis);
+    
+    if (this.queryHistory.length > this.MAX_HISTORY_SIZE) {
+      this.queryHistory = this.queryHistory.slice(-this.MAX_HISTORY_SIZE);
     }
   }
 
@@ -314,7 +327,7 @@ export class QueryAnalysisService {
   ): Promise<QueryAnalysisResult> {
     const template = this.getTemplate(templateId);
     if (!template) {
-      throw new Error('Template not found');
+      throw new QueryError('Template not found', undefined, templateId);
     }
 
     let query = template.query;
@@ -336,7 +349,6 @@ export class QueryAnalysisService {
         this.templates = JSON.parse(data);
       }
     } catch (error) {
-      console.warn('Failed to load query templates:', error);
       this.templates = [];
     }
   }
@@ -352,7 +364,6 @@ export class QueryAnalysisService {
       }
       writeFileSync(this.templatesPath, JSON.stringify(this.templates, null, 2));
     } catch (error) {
-      console.warn('Failed to save query templates:', error);
     }
   }
 
@@ -368,7 +379,6 @@ export class QueryAnalysisService {
       }
       writeFileSync(historyPath, JSON.stringify(this.queryHistory, null, 2));
     } catch (error) {
-      console.warn('Failed to save query history:', error);
     }
   }
 
@@ -378,6 +388,24 @@ export class QueryAnalysisService {
   clearHistory(): void {
     this.queryHistory = [];
     this.saveQueryHistory();
+  }
+
+  /**
+   * Get memory usage statistics
+   */
+  getMemoryStats(): { historySize: number; maxSize: number; memoryUsage: string } {
+    const historySize = this.queryHistory.length;
+    const maxSize = this.MAX_HISTORY_SIZE;
+    
+    const avgQuerySize = 500; // bytes per query (rough estimate)
+    const memoryUsageBytes = historySize * avgQuerySize;
+    const memoryUsageMB = (memoryUsageBytes / 1024 / 1024).toFixed(2);
+    
+    return {
+      historySize,
+      maxSize,
+      memoryUsage: `${memoryUsageMB} MB`
+    };
   }
 
   /**

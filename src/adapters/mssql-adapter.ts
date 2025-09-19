@@ -2,59 +2,91 @@ import mssql from 'mssql';
 import type { config as MssqlConfig } from 'mssql';
 import { BaseDatabaseAdapter } from './base-database-adapter.js';
 import { QueryResult, TableInfo, DatabaseStats, FieldInfo } from '../types/database.js';
+import { ConnectionError, TransactionError, QueryError } from '../types/errors.js';
 
 export class MSSQLAdapter extends BaseDatabaseAdapter {
   private pool: mssql.ConnectionPool | null = null;
+  private transaction: mssql.Transaction | null = null;
 
   async connect(): Promise<void> {
-    const config = this.config;
-    const mssqlConfigObj: MssqlConfig = {
-      server: config.host || 'localhost',
-      port: config.port || 1433,
-      database: config.database || 'master',
-      user: config.username,
-      password: config.password,
-      options: {
-        encrypt: config.ssl || false,
-        trustServerCertificate: config.trustServerCertificate || false,
-        instanceName: config.instanceName,
-      },
-      connectionTimeout: 30000,
-      requestTimeout: 30000,
-    };
+    try {
+      const config = this.config;
+      const mssqlConfigObj: MssqlConfig = {
+        server: config.host || 'localhost',
+        port: config.port || 1433,
+        database: config.database || 'master',
+        user: config.username,
+        password: config.password,
+        options: {
+          encrypt: config.ssl || false,
+          trustServerCertificate: config.trustServerCertificate || false,
+          instanceName: config.instanceName,
+        },
+        connectionTimeout: 30000,
+        requestTimeout: 30000,
+      };
 
-    const { ConnectionPool } = mssql;
-    this.pool = new ConnectionPool(mssqlConfigObj);
-    await this.pool.connect();
+      const { ConnectionPool } = mssql;
+      this.pool = new ConnectionPool(mssqlConfigObj);
+      await this.pool.connect();
+      this.connected = true;
+    } catch (error) {
+      this.connected = false;
+      throw new ConnectionError(
+        `Failed to connect to MSSQL database: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        'mssql'
+      );
+    }
   }
 
   async disconnect(): Promise<void> {
-    if (this.pool) {
-      await this.pool.close();
-      this.pool = null;
+    try {
+      if (this.transaction) {
+        await this.transaction.rollback();
+        this.transaction = null;
+      }
+      if (this.pool) {
+        await this.pool.close();
+        this.pool = null;
+      }
+      this.connected = false;
+    } catch (error) {
+      throw new ConnectionError(
+        `Failed to disconnect from MSSQL database: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        'mssql'
+      );
     }
   }
 
   async executeQuery(query: string, parameters?: unknown[]): Promise<QueryResult> {
     if (!this.pool) {
-      throw new Error('Not connected to database');
+      throw new ConnectionError('Not connected to database', 'mssql');
     }
 
-    const request = this.pool.request();
-    
-    if (parameters) {
-      parameters.forEach((param, index) => {
-        request.input(`param${index}`, param);
-      });
-    }
+    try {
+      const request = this.transaction ? this.transaction.request() : this.pool.request();
+      
+      if (parameters) {
+        parameters.forEach((param, index) => {
+          request.input(`param${index}`, param);
+        });
+      }
 
-    const result = await request.query(query);
-    
-    return {
-      rows: result.recordset || [],
-      rowCount: result.rowsAffected[0] || 0,
-      fields: this.mapFields(result.recordset?.columns || {}),
-    };
+      const result = await request.query(query);
+      
+      return {
+        rows: result.recordset || [],
+        rowCount: result.rowsAffected[0] || 0,
+        fields: this.mapFields(result.recordset?.columns || {}),
+      };
+    } catch (error) {
+      throw new QueryError(
+        `Query execution failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        'mssql',
+        query,
+        parameters
+      );
+    }
   }
 
   async getTables(): Promise<TableInfo[]> {
@@ -238,7 +270,8 @@ export class MSSQLAdapter extends BaseDatabaseAdapter {
     let formattedQuery = query;
     parameters.forEach((param, index) => {
       const placeholder = `@param${index}`;
-      formattedQuery = formattedQuery.replace('?', placeholder);
+      // Replace all occurrences of '?' with the parameter placeholder
+      formattedQuery = formattedQuery.replace(/\?/g, placeholder);
     });
     
     return formattedQuery;
@@ -253,18 +286,61 @@ export class MSSQLAdapter extends BaseDatabaseAdapter {
 
   async beginTransaction(): Promise<void> {
     if (!this.pool) {
-      throw new Error('Not connected to database');
+      throw new ConnectionError('Not connected to database', 'mssql');
+    }
+    
+    if (this.transaction) {
+      throw new TransactionError('Transaction already in progress', 'mssql');
+    }
+
+    try {
+      this.transaction = new mssql.Transaction(this.pool);
+      await this.transaction.begin();
+    } catch (error) {
+      this.transaction = null;
+      throw new TransactionError(
+        `Failed to begin transaction: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        'mssql'
+      );
     }
   }
 
   async commitTransaction(): Promise<void> {
+    if (!this.transaction) {
+      throw new TransactionError('No transaction in progress', 'mssql');
+    }
+
+    try {
+      await this.transaction.commit();
+      this.transaction = null;
+    } catch (error) {
+      this.transaction = null;
+      throw new TransactionError(
+        `Failed to commit transaction: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        'mssql'
+      );
+    }
   }
 
   async rollbackTransaction(): Promise<void> {
+    if (!this.transaction) {
+      throw new TransactionError('No transaction in progress', 'mssql');
+    }
+
+    try {
+      await this.transaction.rollback();
+      this.transaction = null;
+    } catch (error) {
+      this.transaction = null;
+      throw new TransactionError(
+        `Failed to rollback transaction: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        'mssql'
+      );
+    }
   }
 
   isInTransaction(): boolean {
-    return false;
+    return this.transaction !== null;
   }
 
   private mapFields(columns: Record<string, any>): FieldInfo[] {

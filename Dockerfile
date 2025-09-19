@@ -14,4 +14,4 @@ RUN mkdir -p /app/data
 CMD ["node", "dist/index.js", "start"]
 LABEL maintainer="PineMCP Team"
 LABEL description="Professional MCP server supporting multiple database types"
-LABEL version="2.0.0"
+LABEL version="2.1.0"

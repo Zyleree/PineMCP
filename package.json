@@ -1,9 +1,13 @@
 {
   "name": "pinemcp",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "A professional MCP server supporting multiple database types with comprehensive database operations, schema management, and connection management tools",
-  "main": "dist/index.js",
+  "main": "dist/lib.js",
   "type": "module",
+  "exports": {
+    ".": "./dist/lib.js",
+    "./cli": "./dist/index.js"
+  },
   "bin": {
     "pinemcp": "dist/index.js"
   },
